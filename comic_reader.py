@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
 class ImageExtractor(QThread):
     """Thread to extract images from comic book archives."""
 
@@ -107,7 +106,6 @@ class ImageExtractor(QThread):
         image_files.sort(key=lambda x: Path(x).name.lower())
         return image_files
 
-
 class PageWidget(QFrame):
     """Widget to display a single comic page with selection checkbox."""
 
@@ -167,7 +165,6 @@ class PageWidget(QFrame):
         """Return whether this page is selected."""
         return self.selected
 
-
 class ComicBookReader(QMainWindow):
     """Main comic book reader application."""
 
@@ -200,6 +197,20 @@ class ComicBookReader(QMainWindow):
         self.open_button = QPushButton("Open CBR/CBZ File")
         self.open_button.clicked.connect(self.open_file)
         toolbar_layout.addWidget(self.open_button)
+
+        # Navigation buttons
+        self.prev_button = QPushButton("◀ Previous")
+        self.prev_button.clicked.connect(self.open_previous_file)
+        self.prev_button.setEnabled(False)
+        toolbar_layout.addWidget(self.prev_button)
+
+        self.next_button = QPushButton("Next ▶")
+        self.next_button.clicked.connect(self.open_next_file)
+        self.next_button.setEnabled(False)
+        toolbar_layout.addWidget(self.next_button)
+
+        # Add some spacing
+        toolbar_layout.addSpacing(20)
 
         self.select_all_button = QPushButton("Select All")
         self.select_all_button.clicked.connect(self.select_all_pages)
@@ -269,6 +280,18 @@ class ComicBookReader(QMainWindow):
         open_action.setShortcut('Ctrl+O')
         open_action.triggered.connect(self.open_file)
         file_menu.addAction(open_action)
+
+        prev_action = QAction('Previous File', self)
+        prev_action.setShortcut('Ctrl+Left')
+        prev_action.triggered.connect(self.open_previous_file)
+        file_menu.addAction(prev_action)
+
+        next_action = QAction('Next File', self)
+        next_action.setShortcut('Ctrl+Right')
+        next_action.triggered.connect(self.open_next_file)
+        file_menu.addAction(next_action)
+
+        file_menu.addSeparator()
 
         save_action = QAction('Save In Place', self)
         save_action.setShortcut('Ctrl+S')
@@ -341,6 +364,7 @@ class ComicBookReader(QMainWindow):
         self.load_pages()
         self.update_info_panel()
         self.update_revert_button()
+        self.update_navigation_buttons()
 
         # Enable buttons
         self.select_all_button.setEnabled(True)
@@ -390,11 +414,11 @@ class ComicBookReader(QMainWindow):
 
         total_pages = len(self.image_files)
         selected_pages = sum(1 for widget in self.page_widgets if widget.is_selected())
-        
+
         # Determine file format and archive capabilities
         original_ext = Path(self.current_file).suffix.lower()
         format_name = "CBR" if original_ext == '.cbr' else "CBZ"
-        
+
         if original_ext == '.cbr':
             if self.is_rar_available():
                 format_detail = f"{format_name} (RAR-based creation available)"
@@ -440,7 +464,7 @@ Instructions:
         removed_count = total_pages - len(selected_files)
         original_ext = Path(self.current_file).suffix.lower()
         format_name = "CBR" if original_ext == '.cbr' else "CBZ"
-        
+
         # Determine what type of archive will be created
         if original_ext == '.cbr':
             if self.is_rar_available():
@@ -545,14 +569,14 @@ Instructions:
             # Create a temporary directory to organize files with proper names
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
-                
+
                 # Copy files with proper page names
                 for i, file_path in enumerate(selected_files):
                     extension = Path(file_path).suffix
                     new_name = f"page_{i+1:03d}{extension}"
                     temp_file = temp_path / new_name
                     shutil.copy2(file_path, temp_file)
-                
+
                 # Try to create RAR archive
                 rar_commands = ['rar', 'winrar']
                 for rar_cmd in rar_commands:
@@ -560,14 +584,14 @@ Instructions:
                         # RAR command: a = add, -r = recurse subdirectories, -ep1 = exclude base folder from paths
                         cmd = [rar_cmd, 'a', '-r', '-ep1', str(output_path), str(temp_path / '*')]
                         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                        
+
                         if result.returncode == 0:
                             return True
                     except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
                         continue
-                
+
                 return False
-                
+
         except Exception:
             return False
 
@@ -730,17 +754,17 @@ Instructions:
         """Get the latest backup file path for the given original file."""
         original_file = Path(original_path)
         backup_dir = Path.cwd() / "backups"
-        
+
         if not backup_dir.exists():
             return None
-        
+
         # Find all backup files for this original file
         pattern = f"{original_file.stem}_backup_*{original_file.suffix}"
         backup_files = list(backup_dir.glob(pattern))
-        
+
         if not backup_files:
             return None
-        
+
         # Return the most recent backup (sorted by filename which includes timestamp)
         return sorted(backup_files)[-1]
 
@@ -784,6 +808,82 @@ Instructions:
         self.cleanup_temp_dir()
         event.accept()
 
+    def get_comic_files_in_directory(self, file_path: str) -> List[str]:
+        """Get all comic book files in the same directory as the given file."""
+        directory = Path(file_path).parent
+        comic_extensions = {'.cbr', '.cbz'}
+        comic_files = []
+
+        try:
+            for file in directory.iterdir():
+                if file.is_file() and file.suffix.lower() in comic_extensions:
+                    comic_files.append(str(file.resolve()))  # Use resolved absolute path
+        except Exception:
+            return []
+
+        # Sort files naturally
+        comic_files.sort(key=lambda x: Path(x).name.lower())
+        return comic_files
+
+    def get_current_file_index(self) -> int:
+        """Get the index of the current file in the directory listing."""
+        if not self.current_file:
+            return -1
+
+        comic_files = self.get_comic_files_in_directory(self.current_file)
+
+        # Normalize current file path for comparison
+        current_file_normalized = str(Path(self.current_file).resolve())
+
+        try:
+            return comic_files.index(current_file_normalized)
+        except ValueError:
+            return -1
+
+    def update_navigation_buttons(self) -> None:
+        """Update the enabled state of navigation buttons."""
+        if not self.current_file:
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+            return
+
+        comic_files = self.get_comic_files_in_directory(self.current_file)
+        current_index = self.get_current_file_index()
+
+        if current_index >= 0 and len(comic_files) > 1:
+            prev_enabled = current_index > 0
+            next_enabled = current_index < len(comic_files) - 1
+            self.prev_button.setEnabled(prev_enabled)
+            self.next_button.setEnabled(next_enabled)
+        else:
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+
+    def open_previous_file(self) -> None:
+        """Open the previous comic file in the directory."""
+        if not self.current_file:
+            return
+
+        comic_files = self.get_comic_files_in_directory(self.current_file)
+        current_index = self.get_current_file_index()
+
+        if current_index > 0:
+            prev_file = comic_files[current_index - 1]
+            self.current_file = prev_file
+            self.extract_images(prev_file)
+
+    def open_next_file(self) -> None:
+        """Open the next comic file in the directory."""
+        if not self.current_file:
+            return
+
+        comic_files = self.get_comic_files_in_directory(self.current_file)
+        current_index = self.get_current_file_index()
+
+        if current_index >= 0 and current_index < len(comic_files) - 1:
+            next_file = comic_files[current_index + 1]
+            self.current_file = next_file
+            self.extract_images(next_file)
 
 def main() -> None:
     """Main function to run the application."""
@@ -798,7 +898,6 @@ def main() -> None:
     window.show()
 
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()
