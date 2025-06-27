@@ -1,5 +1,6 @@
 ﻿import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -74,9 +75,22 @@ class ImageExtractor(QThread):
             zip_ref.extractall(self.temp_dir)
 
     def extract_rar(self) -> None:
-        """Extract CBR (RAR) file using patool."""
+        """Extract CBR (RAR) file using patool, with fallback to ZIP for ZIP-based CBR files."""
         self.progress_updated.emit(30, "Extracting CBR file...")
-        patoolib.extract_archive(self.file_path, outdir=self.temp_dir)
+        try:
+            # First try to extract as a RAR file
+            patoolib.extract_archive(self.file_path, outdir=self.temp_dir)
+        except Exception as rar_error:
+            # If RAR extraction fails, try ZIP extraction (for ZIP-based CBR files)
+            self.progress_updated.emit(40, "Trying ZIP extraction for CBR file...")
+            try:
+                with zipfile.ZipFile(self.file_path, 'r') as zip_ref:
+                    zip_ref.extractall(self.temp_dir)
+            except Exception as zip_error:
+                # If both fail, raise a combined error message
+                raise Exception(
+                    f"Failed to extract CBR file. RAR error: {str(rar_error)}, ZIP error: {str(zip_error)}"
+                ) from rar_error
 
     def find_image_files(self) -> List[str]:
         """Find all image files in the extracted directory."""
@@ -376,16 +390,30 @@ class ComicBookReader(QMainWindow):
 
         total_pages = len(self.image_files)
         selected_pages = sum(1 for widget in self.page_widgets if widget.is_selected())
+        
+        # Determine file format and archive capabilities
+        original_ext = Path(self.current_file).suffix.lower()
+        format_name = "CBR" if original_ext == '.cbr' else "CBZ"
+        
+        if original_ext == '.cbr':
+            if self.is_rar_available():
+                format_detail = f"{format_name} (RAR-based creation available)"
+            else:
+                format_detail = f"{format_name} (ZIP-based only - no RAR tool)"
+        else:
+            format_detail = f"{format_name} (ZIP-based)"
 
         info_text = f"""
 Current File: {os.path.basename(self.current_file)}
+Format: {format_detail}
 Total Pages: {total_pages}
 Selected Pages: {selected_pages}
 Pages to Remove: {total_pages - selected_pages}
 
 Instructions:
 1. Uncheck pages you want to remove
-2. Click 'Save Modified Archive' to create a new file
+2. Click 'Save In Place' to save in original format
+3. Click 'Save As...' to save as CBZ in a new location
 """
         self.info_text.setText(info_text)
 
@@ -410,12 +438,24 @@ Instructions:
         # Ask for confirmation
         total_pages = len(self.image_files)
         removed_count = total_pages - len(selected_files)
+        original_ext = Path(self.current_file).suffix.lower()
+        format_name = "CBR" if original_ext == '.cbr' else "CBZ"
+        
+        # Determine what type of archive will be created
+        if original_ext == '.cbr':
+            if self.is_rar_available():
+                archive_info = f"Format: {format_name} (will attempt RAR-based, fallback to ZIP-based)"
+            else:
+                archive_info = f"Format: {format_name} (ZIP-based - no RAR tool found)"
+        else:
+            archive_info = f"Format: {format_name} (ZIP-based)"
 
         reply = QMessageBox.question(
             self,
             "Save In Place",
             f"This will replace the original file with {len(selected_files)} pages "
             f"(removing {removed_count} pages).\n\n"
+            f"{archive_info}\n"
             f"A backup will be created in the 'backups' folder.\n\n"
             f"Do you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -485,14 +525,61 @@ Instructions:
             QMessageBox.critical(self, "Error", f"Failed to save archive: {str(e)}")
             self.status_label.setText("Error saving archive.")
 
+    def is_rar_available(self) -> bool:
+        """Check if RAR command-line tool is available."""
+        try:
+            # Try to run 'rar' command to see if it's available
+            subprocess.run(['rar'], capture_output=True, text=True, timeout=5)
+            return True
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+            try:
+                # Try alternative RAR executable names
+                subprocess.run(['winrar'], capture_output=True, text=True, timeout=5)
+                return True
+            except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+                return False
+
+    def create_rar_archive(self, selected_files: List[str], output_path: str) -> bool:
+        """Create a RAR archive using command-line RAR tool. Returns True if successful."""
+        try:
+            # Create a temporary directory to organize files with proper names
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                
+                # Copy files with proper page names
+                for i, file_path in enumerate(selected_files):
+                    extension = Path(file_path).suffix
+                    new_name = f"page_{i+1:03d}{extension}"
+                    temp_file = temp_path / new_name
+                    shutil.copy2(file_path, temp_file)
+                
+                # Try to create RAR archive
+                rar_commands = ['rar', 'winrar']
+                for rar_cmd in rar_commands:
+                    try:
+                        # RAR command: a = add, -r = recurse subdirectories, -ep1 = exclude base folder from paths
+                        cmd = [rar_cmd, 'a', '-r', '-ep1', str(output_path), str(temp_path / '*')]
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                        
+                        if result.returncode == 0:
+                            return True
+                    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+                        continue
+                
+                return False
+                
+        except Exception:
+            return False
+
     def create_new_archive_in_place(self, selected_files: List[str], original_path: str) -> None:
-        """Create a new CBZ archive in place of the original, with backup."""
+        """Create a new archive in place of the original, with backup. Preserves original format (CBR/CBZ)."""
         try:
             self.status_label.setText("Creating backup...")
 
             # Create backup file in backups folder
             backup_path = self.get_backup_path(original_path)
             original_file = Path(original_path)
+            original_ext = original_file.suffix.lower()
 
             # If backup already exists, ask user what to do
             if backup_path.exists():
@@ -511,16 +598,44 @@ Instructions:
             shutil.copy2(original_path, backup_path)
             self.status_label.setText("Creating new archive...")
 
-            # Create temporary file for the new archive
-            temp_archive = original_file.parent / f"{original_file.stem}_temp.cbz"
+            # Create temporary file for the new archive with same extension as original
+            temp_archive = original_file.parent / f"{original_file.stem}_temp{original_ext}"
 
-            with zipfile.ZipFile(temp_archive, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                for i, file_path in enumerate(selected_files):
-                    # Create a proper filename with page number
-                    extension = Path(file_path).suffix
-                    new_name = f"page_{i+1:03d}{extension}"
+            if original_ext == '.cbr':
+                # For CBR files, try to create a true RAR archive first
+                if self.is_rar_available():
+                    self.status_label.setText("Creating RAR archive...")
+                    if self.create_rar_archive(selected_files, str(temp_archive)):
+                        archive_type = "RAR-based CBR"
+                    else:
+                        # If RAR creation fails, fall back to ZIP-based CBR
+                        self.status_label.setText("RAR failed, creating ZIP-based CBR...")
+                        with zipfile.ZipFile(temp_archive, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                            for i, file_path in enumerate(selected_files):
+                                extension = Path(file_path).suffix
+                                new_name = f"page_{i+1:03d}{extension}"
+                                zip_file.write(file_path, new_name)
+                        archive_type = "ZIP-based CBR"
+                else:
+                    # No RAR tool available, create ZIP-based CBR
+                    self.status_label.setText("Creating ZIP-based CBR (no RAR tool found)...")
+                    with zipfile.ZipFile(temp_archive, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        for i, file_path in enumerate(selected_files):
+                            extension = Path(file_path).suffix
+                            new_name = f"page_{i+1:03d}{extension}"
+                            zip_file.write(file_path, new_name)
+                    archive_type = "ZIP-based CBR"
+            else:  # CBZ format
+                # For CBZ files, always use ZIP format
+                self.status_label.setText("Creating ZIP archive...")
+                with zipfile.ZipFile(temp_archive, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for i, file_path in enumerate(selected_files):
+                        # Create a proper filename with page number
+                        extension = Path(file_path).suffix
+                        new_name = f"page_{i+1:03d}{extension}"
 
-                    zip_file.write(file_path, new_name)
+                        zip_file.write(file_path, new_name)
+                archive_type = "ZIP-based CBZ"
 
             # Replace original file with new archive
             if original_file.exists():
@@ -528,17 +643,19 @@ Instructions:
             temp_archive.rename(original_file)  # Rename temp to original
 
             removed_count = len(self.image_files) - len(selected_files)
+            format_name = "CBR" if original_ext == '.cbr' else "CBZ"
             QMessageBox.information(
                 self,
                 "Success",
                 f"Archive saved successfully!\n"
                 f"Saved {len(selected_files)} pages.\n"
                 f"Removed {removed_count} pages.\n"
+                f"Format: {format_name} ({archive_type})\n"
                 f"Original backed up to: backups/{backup_path.name}\n"
                 f"File: {original_path}"
             )
 
-            self.status_label.setText(f"Archive saved in place. Backup: backups/{backup_path.name}")
+            self.status_label.setText(f"Archive saved in place ({archive_type}). Backup: backups/{backup_path.name}")
             self.update_revert_button()  # Update revert button visibility
 
         except Exception as e:
