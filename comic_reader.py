@@ -3,6 +3,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -415,7 +416,7 @@ Instructions:
             "Save In Place",
             f"This will replace the original file with {len(selected_files)} pages "
             f"(removing {removed_count} pages).\n\n"
-            f"A backup will be created as '{Path(self.current_file).stem}_backup{Path(self.current_file).suffix}'.\n\n"
+            f"A backup will be created in the 'backups' folder.\n\n"
             f"Do you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -489,9 +490,9 @@ Instructions:
         try:
             self.status_label.setText("Creating backup...")
 
-            # Create backup file
+            # Create backup file in backups folder
+            backup_path = self.get_backup_path(original_path)
             original_file = Path(original_path)
-            backup_path = original_file.parent / f"{original_file.stem}_backup{original_file.suffix}"
 
             # If backup already exists, ask user what to do
             if backup_path.exists():
@@ -533,11 +534,11 @@ Instructions:
                 f"Archive saved successfully!\n"
                 f"Saved {len(selected_files)} pages.\n"
                 f"Removed {removed_count} pages.\n"
-                f"Original backed up as: {backup_path.name}\n"
+                f"Original backed up to: backups/{backup_path.name}\n"
                 f"File: {original_path}"
             )
 
-            self.status_label.setText(f"Archive saved in place. Backup: {backup_path.name}")
+            self.status_label.setText(f"Archive saved in place. Backup: backups/{backup_path.name}")
             self.update_revert_button()  # Update revert button visibility
 
         except Exception as e:
@@ -557,9 +558,9 @@ Instructions:
             return
 
         original_file = Path(self.current_file)
-        backup_path = original_file.parent / f"{original_file.stem}_backup{original_file.suffix}"
+        backup_path = self.get_latest_backup_path(self.current_file)
 
-        if not backup_path.exists():
+        if not backup_path or not backup_path.exists():
             QMessageBox.warning(self, "Warning", "No backup file found.")
             return
 
@@ -568,7 +569,7 @@ Instructions:
             "Revert from Backup",
             f"This will replace the current file with the backup version.\n\n"
             f"Current file: {original_file.name}\n"
-            f"Backup file: {backup_path.name}\n\n"
+            f"Backup file: backups/{backup_path.name}\n\n"
             f"Do you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -594,14 +595,45 @@ Instructions:
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to revert from backup: {str(e)}")
 
+    def get_backup_path(self, original_path: str) -> Path:
+        """Get the backup file path in the backups folder."""
+        original_file = Path(original_path)
+
+        # Create backups directory in current working directory
+        backup_dir = Path.cwd() / "backups"
+        backup_dir.mkdir(exist_ok=True)
+
+        # Create backup filename with timestamp to avoid conflicts
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_filename = f"{original_file.stem}_backup_{timestamp}{original_file.suffix}"
+
+        return backup_dir / backup_filename
+
+    def get_latest_backup_path(self, original_path: str) -> Optional[Path]:
+        """Get the latest backup file path for the given original file."""
+        original_file = Path(original_path)
+        backup_dir = Path.cwd() / "backups"
+        
+        if not backup_dir.exists():
+            return None
+        
+        # Find all backup files for this original file
+        pattern = f"{original_file.stem}_backup_*{original_file.suffix}"
+        backup_files = list(backup_dir.glob(pattern))
+        
+        if not backup_files:
+            return None
+        
+        # Return the most recent backup (sorted by filename which includes timestamp)
+        return sorted(backup_files)[-1]
+
     def check_backup_exists(self) -> bool:
         """Check if a backup exists for the current file."""
         if not self.current_file:
             return False
 
-        original_file = Path(self.current_file)
-        backup_path = original_file.parent / f"{original_file.stem}_backup{original_file.suffix}"
-        return backup_path.exists()
+        latest_backup = self.get_latest_backup_path(self.current_file)
+        return latest_backup is not None and latest_backup.exists()
 
     def update_revert_button(self) -> None:
         """Update the visibility and state of the revert button."""
