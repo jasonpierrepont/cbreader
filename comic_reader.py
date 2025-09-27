@@ -334,7 +334,10 @@ class ComicBookReader(QMainWindow):
         """Extract images from the comic book archive."""
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.status_label.setText("Extracting archive...")
+
+        # Show which file is being loaded
+        filename = os.path.basename(file_path)
+        self.status_label.setText(f"Loading {filename}...")
 
         # Clean up previous temp directory
         self.cleanup_temp_dir()
@@ -357,8 +360,14 @@ class ComicBookReader(QMainWindow):
         self.image_files = image_files
         self.temp_dir = self.extractor.temp_dir
 
+        # Reset navigation button text
+        self.prev_button.setText("◀ Previous")
+        self.next_button.setText("Next ▶")
+
         if not image_files:
             QMessageBox.warning(self, "Warning", "No image files found in the archive.")
+            # Still update navigation buttons even if no images found
+            self.update_navigation_buttons()
             return
 
         self.load_pages()
@@ -378,6 +387,18 @@ class ComicBookReader(QMainWindow):
         """Handle extraction error."""
         self.progress_bar.setVisible(False)
         self.status_label.setText("Error occurred during extraction.")
+
+        # Reset navigation button text and state
+        self.prev_button.setText("◀ Previous")
+        self.next_button.setText("Next ▶")
+        self.update_navigation_buttons()
+
+        # Re-enable other buttons
+        self.select_all_button.setEnabled(bool(self.page_widgets))
+        self.select_none_button.setEnabled(bool(self.page_widgets))
+        self.save_button.setEnabled(bool(self.page_widgets))
+        self.save_as_button.setEnabled(bool(self.page_widgets))
+
         QMessageBox.critical(self, "Extraction Error", error_message)
 
     def load_pages(self) -> None:
@@ -869,6 +890,18 @@ Instructions:
 
         if current_index > 0:
             prev_file = comic_files[current_index - 1]
+
+            # Show loading state
+            self.prev_button.setText("Loading...")
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+
+            # Disable other buttons during navigation
+            self.save_button.setEnabled(False)
+            self.save_as_button.setEnabled(False)
+            self.select_all_button.setEnabled(False)
+            self.select_none_button.setEnabled(False)
+
             self.current_file = prev_file
             self.extract_images(prev_file)
 
@@ -882,6 +915,18 @@ Instructions:
 
         if current_index >= 0 and current_index < len(comic_files) - 1:
             next_file = comic_files[current_index + 1]
+
+            # Show loading state
+            self.next_button.setText("Loading...")
+            self.next_button.setEnabled(False)
+            self.prev_button.setEnabled(False)
+
+            # Disable other buttons during navigation
+            self.save_button.setEnabled(False)
+            self.save_as_button.setEnabled(False)
+            self.select_all_button.setEnabled(False)
+            self.select_none_button.setEnabled(False)
+
             self.current_file = next_file
             self.extract_images(next_file)
 
