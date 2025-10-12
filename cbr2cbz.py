@@ -9,7 +9,8 @@ Features:
 - Convert single CBR files to CBZ
 - Batch convert all CBR files in a directory
 - Preserve original file structure and metadata
-- Create backups of original files
+- Move original CBRs to a backups folder after successful conversion
+- Detect mis-labeled CBRs that are actually ZIP files and just rename to .cbz
 - Command-line interface with comprehensive options
 - Progress tracking for batch operations
 
@@ -22,6 +23,7 @@ import argparse
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -91,13 +93,105 @@ class CBRToCBZConverter:
             self.logger.error(f"Failed to create backup: {e}")
             return None
 
+    def _move_original_to_backup(self, cbr_path: Path) -> Optional[Path]:
+        """Move the original CBR file to the backups folder after success.
+
+        Returns the destination path if moved successfully, otherwise None.
+        """
+        if not self.create_backups:
+            return None
+
+        backup_dir = cbr_path.parent / self.backup_dir
+        backup_dir.mkdir(exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{cbr_path.stem}_backup_{timestamp}{cbr_path.suffix}"
+        dest_path = backup_dir / backup_name
+
+        try:
+            shutil.move(str(cbr_path), str(dest_path))
+            self.logger.info(f"Moved original to backup: {dest_path}")
+            return dest_path
+        except Exception as e:
+            self.logger.error(f"Failed to move original to backup: {e}")
+            return None
+
+    def _rename_to_cbz(self, cbr_path: Path) -> Tuple[bool, str]:
+        """If the .cbr is actually a ZIP archive, rename it to .cbz.
+
+        Respects the overwrite flag when a .cbz of the same name exists.
+
+        Returns (success, message).
+        """
+        cbz_dest = cbr_path.with_suffix('.cbz')
+
+        # Handle existing destination
+        if cbz_dest.exists():
+            if not self.overwrite:
+                return False, f"CBZ already exists (use --overwrite to replace): {cbz_dest}"
+            try:
+                cbz_dest.unlink()
+            except Exception as e:
+                return False, f"Failed to remove existing CBZ before rename: {cbz_dest} ({e})"
+
+        try:
+            cbr_path.rename(cbz_dest)
+            return True, f"File is a ZIP archive; renamed to: {cbz_dest}"
+        except Exception as e:
+            self.logger.error(f"Failed to rename CBR to CBZ: {e}")
+            return False, f"Failed to rename to CBZ: {e}"
+
     def _extract_cbr(self, cbr_path: Path, extract_dir: Path) -> bool:
-        """Extract CBR file to temporary directory."""
+        """Extract CBR file to temporary directory.
+
+        Tries patool first; if it fails, falls back to 7-Zip if available.
+        """
         try:
             patoolib.extract_archive(str(cbr_path), outdir=str(extract_dir))
             return True
         except Exception as e:
-            self.logger.error(f"Failed to extract {cbr_path}: {e}")
+            self.logger.warning(f"patool extraction failed for {cbr_path}: {e}")
+            # Fallback to 7-Zip
+            if self._extract_with_7z(cbr_path, extract_dir):
+                self.logger.info("Extracted using 7-Zip fallback")
+                return True
+            self.logger.error(f"Failed to extract {cbr_path} with patool and 7-Zip fallback")
+            return False
+
+    def _find_7z(self) -> Optional[str]:
+        """Find a 7-Zip executable on PATH or common install locations."""
+        candidates = ["7z", "7za", "7zr"]
+        for name in candidates:
+            path = shutil.which(name)
+            if path:
+                return path
+        # Common Windows locations
+        common_paths = [
+            r"C:\\Program Files\\7-Zip\\7z.exe",
+            r"C:\\Program Files (x86)\\7-Zip\\7z.exe",
+        ]
+        for p in common_paths:
+            if Path(p).exists():
+                return p
+        return None
+
+    def _extract_with_7z(self, archive_path: Path, extract_dir: Path) -> bool:
+        """Extract archive using 7-Zip if available."""
+        sevenz = self._find_7z()
+        if not sevenz:
+            self.logger.debug("7-Zip not found on system PATH or common locations")
+            return False
+        cmd = [sevenz, "x", "-y", f"-o{str(extract_dir)}", str(archive_path)]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                return True
+            self.logger.error(
+                "7-Zip extraction failed (code %s): %s", result.returncode, (result.stderr or result.stdout)
+            )
+            return False
+        except Exception as e:
+            self.logger.error(f"Error running 7-Zip: {e}")
             return False
 
     def _create_cbz(self, source_dir: Path, cbz_path: Path) -> bool:
@@ -152,6 +246,14 @@ class CBRToCBZConverter:
         if cbr_path.suffix.lower() != '.cbr':
             return False, f"Not a CBR file: {cbr_path}"
 
+        # If the .cbr is actually a ZIP archive, just rename to .cbz
+        try:
+            if zipfile.is_zipfile(cbr_path):
+                return self._rename_to_cbz(cbr_path)
+        except Exception as e:
+            # If zipfile check itself errors, log and continue with normal flow
+            self.logger.debug(f"zipfile check failed for {cbr_path}: {e}")
+
         cbz_path = cbr_path.with_suffix('.cbz')
 
         # Check if CBZ already exists
@@ -159,9 +261,6 @@ class CBRToCBZConverter:
             return False, f"CBZ already exists (use --overwrite to replace): {cbz_path}"
 
         self.logger.info(f"Converting: {cbr_path}")
-
-        # Create backup if requested
-        self._create_backup(cbr_path)
 
         # Create temporary directory for extraction
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -174,6 +273,12 @@ class CBRToCBZConverter:
             # Create CBZ
             if not self._create_cbz(temp_path, cbz_path):
                 return False, f"Failed to create CBZ: {cbz_path}"
+
+            # Move original to backups only after successful CBZ creation
+            moved_path = self._move_original_to_backup(cbr_path)
+            if self.create_backups and moved_path is None:
+                # CBZ was created but original wasn't moved; report partial issue
+                self.logger.warning("CBZ created but failed to move original to backups")
 
         return True, f"Successfully converted: {cbr_path} -> {cbz_path}"
 
@@ -222,14 +327,15 @@ class CBRToCBZConverter:
 def main() -> None:
     """Command-line interface for CBR to CBZ conversion."""
     parser = argparse.ArgumentParser(
-        description="Convert CBR files to CBZ format",
+        description="Convert CBR files to CBZ format. If a .cbr is actually a ZIP, it will be renamed to .cbz.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s file.cbr                    # Convert single file
+  %(prog)s mislabeled.cbr              # If ZIP, will be renamed to mislabeled.cbz
   %(prog)s /path/to/comics/            # Convert all CBR files in directory
   %(prog)s /path/to/comics/ -r         # Convert recursively
-  %(prog)s file.cbr --no-backup        # Convert without creating backup
+  %(prog)s file.cbr --no-backup        # Convert without moving original to backups
   %(prog)s file.cbr --overwrite        # Overwrite existing CBZ files
         """
     )
@@ -248,7 +354,7 @@ Examples:
     parser.add_argument(
         '--no-backup',
         action='store_true',
-        help='Do not create backup copies of original CBR files'
+        help='Do not move original CBR files to backups after conversion'
     )
 
     parser.add_argument(
