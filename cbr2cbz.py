@@ -312,6 +312,10 @@ class CBRToCBZConverter:
         self.logger.info(f"Found {len(cbr_files)} CBR files to convert")
 
         for cbr_file in cbr_files:
+            # skip files already in backup folders
+            if cbr_file.parent.name == self.backup_dir:
+                self.logger.debug(f"Skipping file in backup folder: {cbr_file}")
+                continue
             success, message = self.convert_file(cbr_file)
             if success:
                 successful += 1
