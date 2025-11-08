@@ -7,7 +7,7 @@ This file demonstrates how to use the CBRToCBZConverter class programmatically.
 
 from pathlib import Path
 
-from cbr2cbz import CBRToCBZConverter
+from cbreader.cli.cbr2cbz import CBRToCBZConverter
 
 
 def example_single_file_conversion() -> None:

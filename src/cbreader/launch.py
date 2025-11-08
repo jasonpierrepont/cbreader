@@ -5,5 +5,5 @@ A simple launcher script for the comic book reader application.
 """
 
 if __name__ == "__main__":
-    from comic_reader import main
+    from cbreader.comic_reader import main
     main()

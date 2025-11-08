@@ -9,7 +9,7 @@ current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir))
 
 # Import and run the tkinter application
-from comic_reader_tkinter import main
+from cbreader.comic_reader_tkinter import main
 
 if __name__ == "__main__":
     main()

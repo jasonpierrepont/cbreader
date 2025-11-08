@@ -9,11 +9,11 @@ from PySide6.QtWidgets import (
 )
 
 # Import app logic
-from find_missing_meta import (
+from cbreader.cli.find_missing_meta import (
     load_library, find_missing_meta, remove_missing_comics, list_missing_metadata
 )
 from sqlmodel import Session, SQLModel, create_engine
-from cbr2cbz import CBRToCBZConverter
+from cbreader.cli.cbr2cbz import CBRToCBZConverter
 
 
 class WorkerSignals(QObject):

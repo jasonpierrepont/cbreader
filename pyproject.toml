@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "comic-book-reader"
+name = "cbreader"
 version = "1.0.0"
 description = "A Python application to read CBR/CBZ comic book archives and remove unwanted pages"
 readme = "README.md"
@@ -54,22 +54,21 @@ Documentation = "https://github.com/yourusername/comic-book-reader#readme"
 Issues = "https://github.com/yourusername/comic-book-reader/issues"
 
 [project.scripts]
-comic-reader = "comic_reader:main"
-cbr-reader = "comic_reader:main"
+backup-pdfs = "cbreader.cli.backup_pdfs:main"
+cbr2cbz = "cbreader.cli.cbr2cbz:main"
+clean-names = "cbreader.cli.clean_names:main"
+comic-reader = "omic_reader:main"
+find-missing-meta = "cbreader.cli.find_missing_meta:main"
+pdf2cbz = "cbreader.cli.pdf2cbz:main"
+remove-backups = "cbreader.cli.remove_backups:main"
 
 [project.gui-scripts]
-comic-reader-gui = "comic_reader:main"
-
-[tool.hatch.build.targets.wheel]
-packages = ["comic_reader.py", "launch.py"]
+cbr-reader = "cbreader.comic_reader:main"
+comic-reader-tk = "cbreader.comic_reader:main"
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "comic_reader.py",
-    "launch.py",
-    "README.md",
-    "requirements.txt",
-    "pyproject.toml",
+packages = [
+    "src/cbreader",
 ]
 
 # Black configuration
