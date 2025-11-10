@@ -33,7 +33,7 @@ dependencies = [
     "Pillow>=9.0.0",
     "patool>=1.12.0",
     "pymupdf>=1.24.11",
-    "sqlmodel>=0.0.27",
+    "sqlalchemy>=2.0.0",
     "requests>=2.32.4",
 ]
 

@@ -4,44 +4,29 @@ Search through comics for missing metadatafiles
 Find any cbr files and convert to cbz
 Find any PDF files and convert to cbz.
 """
+import argparse
+import zipfile
 from pathlib import Path
 from typing import Optional
-import zipfile
-from sqlmodel import SQLModel, Field, create_engine, Session, select, func
-import argparse
+
 import patoolib
-import datetime
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
-class Comic(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    file_path: str = Field(index=True, unique=True)
-    has_metadata: bool = Field(default=False)
-    file_type: str = Field(index=True)  # e.g., 'cbz', 'cbr', 'pdf'
-    created_at: datetime.datetime = Field(default_factory=datetime.datetime.now)
-    updated_at: datetime.datetime = Field(
-            default_factory=datetime.datetime.now,
-            sa_column_kwargs={"onupdate": func.now()} # Use func.now() for database-level update
-        )
-    def change_path(self, new_path: str|Path) -> None:
-        old_ext = Path(self.file_path).suffix
-        new_ext = Path(new_path).suffix
-        self.file_path = str(new_path)
-        if old_ext != new_ext:
-            self.file_type = new_ext.lstrip('.').lower()
-
+from cbreader.db_models import Base, Comic
 
 def load_comics_from_db(session: Session) -> list[Comic]:
     """Load all comics from the database."""
     query = select(Comic)
-    return session.exec(query).all()
+    return list(session.execute(query).scalars().all())
 
 
 def find_missing_meta(session: Session, root:Path) -> None:
     """Find comic files missing metadata files."""
     total_checked = 0
     # load files from database that have metadata
-    metadata_results = session.exec(select(Comic).where(Comic.has_metadata == True)).all()
-    comics_with_metadata = {Path(comic.file_path) for comic in metadata_results}
+    metadata_results = list(session.execute(select(Comic).where(Comic.has_metadata)).scalars().all())
+    comics_with_metadata = {Path(str(comic.file_path)) for comic in metadata_results}
 
     # Placeholder for actual implementation
     print("Searching for comic files missing metadata...")
@@ -72,9 +57,9 @@ def load_library(session: Session, root_path: Path, skip_zip_scan_if_known: bool
         # Optional: preload cache of known files with metadata to avoid per-file DB lookups and zip scans
         cache: set[str] = set()
         if skip_zip_scan_if_known:
-            rows = session.exec(select(Comic.file_path).where(Comic.has_metadata)).all()
+            rows = list(session.execute(select(Comic).where(Comic.has_metadata)).scalars().all())
             prefix = str(root_path)
-            cache = {str(fp) for fp in rows if isinstance(fp, (str,)) and str(fp).startswith(prefix)}
+            cache = {str(comic.file_path) for comic in rows if str(comic.file_path).startswith(prefix)}
             print(f"Loaded {len(cache)} known comics with metadata from DB cache.")
 
         # Scan the directory for comic files and update the database
@@ -86,7 +71,7 @@ def load_library(session: Session, root_path: Path, skip_zip_scan_if_known: bool
                     continue
 
                 # Fetch existing record if any (only for files we will touch)
-                comic = session.exec(select(Comic).where(Comic.file_path == str(file))).first()
+                comic = session.execute(select(Comic).where(Comic.file_path == str(file))).scalars().first()
 
                 has_metadata = False
                 if file_type == 'cbz':
@@ -118,11 +103,11 @@ def remove_missing_comics(session: Session, root_path: Path) -> None:
     try:
         # Filter by path prefix using startswith in Python after fetching relevant rows.
         # For large datasets, consider normalizing path and indexing for DB-side filtering.
-        comics = session.exec(select(Comic)).all()
-        comics = [c for c in comics if c.file_path.startswith(str(root_path))]
+        comics = list(session.execute(select(Comic)).scalars().all())
+        comics = [c for c in comics if str(c.file_path).startswith(str(root_path))]
         removed = 0
         for comic in comics:
-            if not Path(comic.file_path).exists():
+            if not Path(str(comic.file_path)).exists():
                 session.delete(comic)
                 removed += 1
         session.commit()
@@ -132,9 +117,9 @@ def remove_missing_comics(session: Session, root_path: Path) -> None:
         raise
 
 def list_missing_metadata(session: Session, root_path: Optional[Path]=None) -> None:
-    results = session.exec(select(Comic)).all()
+    results = list(session.execute(select(Comic)).scalars().all())
     for comic in results:
-        if (not comic.has_metadata) and (not root_path or comic.file_path.startswith(str(root_path))):
+        if (not comic.has_metadata) and (not root_path or str(comic.file_path).startswith(str(root_path))):
             print(comic.file_path)
 
 def parse_args() -> argparse.Namespace:
@@ -168,7 +153,7 @@ def main():
     args = parse_args()
     db_path = Path("comics_metadata.db")
     engine = create_engine(f"sqlite:///{db_path}")
-    SQLModel.metadata.create_all(engine)
+    Base.metadata.create_all(engine)
     session = Session(engine)
     try:
         print(args)

@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (
 from cbreader.cli.find_missing_meta import (
     load_library, find_missing_meta, remove_missing_comics, list_missing_metadata
 )
-from sqlmodel import Session, SQLModel, create_engine
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from cbreader.db_models import Base
 from cbreader.cli.cbr2cbz import CBRToCBZConverter
 
 
@@ -184,7 +186,7 @@ class MetaGUI(QWidget):
     def _load_wrapper(self, root: Path, skip: bool):
         db_path = Path("comics_metadata.db")
         engine = create_engine(f"sqlite:///{db_path}")
-        SQLModel.metadata.create_all(engine)
+        Base.metadata.create_all(engine)
         session = Session(engine)
         try:
             load_library(session, root, skip_zip_scan_if_known=skip)
@@ -201,7 +203,7 @@ class MetaGUI(QWidget):
     def _remove_missing_wrapper(self, root: Path):
         db_path = Path("comics_metadata.db")
         engine = create_engine(f"sqlite:///{db_path}")
-        SQLModel.metadata.create_all(engine)
+        Base.metadata.create_all(engine)
         session = Session(engine)
         try:
             remove_missing_comics(session, root)
@@ -218,7 +220,7 @@ class MetaGUI(QWidget):
     def _find_wrapper(self, root: Path):
         db_path = Path("comics_metadata.db")
         engine = create_engine(f"sqlite:///{db_path}")
-        SQLModel.metadata.create_all(engine)
+        Base.metadata.create_all(engine)
         session = Session(engine)
         try:
             find_missing_meta(session, root)
@@ -234,7 +236,7 @@ class MetaGUI(QWidget):
     def _list_wrapper(self, root: Path | None):
         db_path = Path("comics_metadata.db")
         engine = create_engine(f"sqlite:///{db_path}")
-        SQLModel.metadata.create_all(engine)
+        Base.metadata.create_all(engine)
         session = Session(engine)
         try:
             list_missing_metadata(session, root)
